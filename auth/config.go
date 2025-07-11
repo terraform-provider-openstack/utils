@@ -12,9 +12,8 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack"
 	"github.com/gophercloud/gophercloud/v2/openstack/objectstorage/v1/swauth"
 	osClient "github.com/gophercloud/utils/v2/client"
-	"github.com/gophercloud/utils/v2/internal"
 	"github.com/gophercloud/utils/v2/openstack/clientconfig"
-	"github.com/gophercloud/utils/v2/terraform/mutexkv"
+	"github.com/terraform-provider-openstack/utils/v2/mutexkv"
 )
 
 type Config struct {
@@ -177,7 +176,7 @@ func (c *Config) LoadAndValidate(ctx context.Context) error {
 	// Set UserAgent
 	client.UserAgent.Prepend(terraformUserAgent(c.TerraformVersion, c.SDKVersion))
 
-	config, err := internal.PrepareTLSConfig(c.CACertFile, c.ClientCertFile, c.ClientKeyFile, c.Insecure)
+	config, err := PrepareTLSConfig(c.CACertFile, c.ClientCertFile, c.ClientKeyFile, c.Insecure)
 	if err != nil {
 		return err
 	}
@@ -227,8 +226,8 @@ func (c *Config) Authenticate(ctx context.Context) error {
 		return nil
 	}
 
-	c.MutexKV.Lock("auth")
-	defer c.MutexKV.Unlock("auth")
+	c.Lock("auth")
+	defer c.Unlock("auth")
 
 	if c.authFailed != nil {
 		return c.authFailed
@@ -400,8 +399,8 @@ func (c *Config) ObjectStorageV1Client(ctx context.Context, region string) (*gop
 		})
 	}
 
-	c.MutexKV.Lock("SwAuth")
-	defer c.MutexKV.Unlock("SwAuth")
+	c.Lock("SwAuth")
+	defer c.Unlock("SwAuth")
 
 	if c.swAuthFailed != nil {
 		return nil, c.swAuthFailed
