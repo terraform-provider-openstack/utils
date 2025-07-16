@@ -7,9 +7,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 
 	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack"
+	tokens2 "github.com/gophercloud/gophercloud/v2/openstack/identity/v2/tokens"
+	tokens3 "github.com/gophercloud/gophercloud/v2/openstack/identity/v3/tokens"
 	"github.com/gophercloud/gophercloud/v2/openstack/objectstorage/v1/swauth"
 	osClient "github.com/gophercloud/utils/v2/client"
 	"github.com/gophercloud/utils/v2/openstack/clientconfig"
@@ -238,27 +241,58 @@ func (c *Config) Authenticate(ctx context.Context) error {
 			c.authFailed = err
 			return err
 		}
+
+		// override original EndpointLocator with the one from the Config
+		c.OsClient.EndpointLocator = c.EndpointLocator
+
 		c.authenticated = true
 	}
 
 	return nil
 }
 
+func applyDefaults(eo *gophercloud.EndpointOpts, service string) {
+	eo.Type = service
+
+	for t, aliases := range gophercloud.ServiceTypeAliases {
+		// we must clone the aliases slice to avoid modifying the original
+		aliases := slices.Clone(aliases)
+
+		// if the service type corresponds to the endpoint type,
+		// set the aliases to the endpoint type and return
+		if service == t {
+			eo.Aliases = aliases
+			log.Printf("[DEBUG] OpenStack Endpoint Type is: %s, aliases: %q", service, eo.Aliases)
+			return
+		}
+
+		// if the service type corresponds to an alias,
+		// make it the primary endpoint type and remove from aliases
+		if i := slices.Index(aliases, service); i >= 0 {
+			eo.Aliases = append([]string{t}, append(aliases[:i], aliases[i+1:]...)...)
+			log.Printf("[DEBUG] OpenStack Endpoint Type is: %s, aliases: %q", service, eo.Aliases)
+			return
+		}
+	}
+}
+
 // DetermineEndpoint is a helper method to determine if the user wants to
 // override an endpoint returned from the catalog.
 func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gophercloud.EndpointOpts, service string) (*gophercloud.ServiceClient, error) {
+	// override the default gophercloud eo.Type with the desired service type
+	applyDefaults(&eo, service)
 	v, ok := c.EndpointOverrides[service]
 	if !ok {
 		return client, nil
 	}
 	val, ok := v.(string)
-	if !ok || val == "" {
+	if !ok || val == "" || val == service {
 		return client, nil
 	}
 
 	// overriden endpoint is a URL
 	if u, err := url.Parse(val); err == nil && u.Scheme != "" && u.Host != "" {
-		eo.ApplyDefaults(service)
+		applyDefaults(&eo, service)
 		client.ProviderClient = c.OsClient
 		client.Endpoint = val
 		client.ResourceBase = ""
@@ -268,7 +302,7 @@ func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gopherc
 	}
 
 	// overriden endpoint is a new service type
-	eo.ApplyDefaults(val)
+	applyDefaults(&eo, val)
 	url, err := c.OsClient.EndpointLocator(eo)
 	if err != nil {
 		log.Printf("[DEBUG] Cannot set a new OpenStack Endpoint %s alias: %v", val, err)
@@ -280,6 +314,108 @@ func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gopherc
 
 	log.Printf("[DEBUG] OpenStack Endpoint for %s alias: %s", val, url)
 	return client, nil
+}
+
+func (c *Config) EndpointLocator(eo gophercloud.EndpointOpts) (string, error) {
+	// aliases with the preferred order of service types
+	aliases := eo.Types()
+	log.Printf("[DEBUG] OpenStack Endpoint Locator aliases: %q", aliases)
+
+	switch v := c.OsClient.GetAuthResult().(type) {
+	case (interface {
+		ExtractServiceCatalog() (*tokens3.ServiceCatalog, error)
+	}):
+		catalog, err := v.ExtractServiceCatalog()
+		if err != nil {
+			log.Printf("[DEBUG] Failed to extract service catalog: %v", err)
+			return "", err
+		}
+		return v3EndpointURL(catalog, eo, aliases)
+	case (interface {
+		ExtractServiceCatalog() (*tokens2.ServiceCatalog, error)
+	}):
+		catalog, err := v.ExtractServiceCatalog()
+		if err != nil {
+			log.Printf("[DEBUG] Failed to extract service catalog: %v", err)
+			return "", err
+		}
+		return v2EndpointURL(catalog, eo, aliases)
+	default:
+		return "", fmt.Errorf("Unsupported authentication result type: %T", v)
+	}
+}
+
+func v2EndpointURL(catalog *tokens2.ServiceCatalog, opts gophercloud.EndpointOpts, aliases []string) (string, error) {
+	// loop over prioritized aliases and find the first matching endpoint
+	for _, alias := range aliases {
+		for _, entry := range catalog.Entries {
+			if alias == entry.Type && (opts.Name == "" || entry.Name == opts.Name) {
+				for _, endpoint := range entry.Endpoints {
+					if opts.Region != "" && endpoint.Region != opts.Region {
+						continue
+					}
+
+					var endpointURL string
+					switch opts.Availability {
+					case gophercloud.AvailabilityPublic:
+						endpointURL = gophercloud.NormalizeURL(endpoint.PublicURL)
+					case gophercloud.AvailabilityInternal:
+						endpointURL = gophercloud.NormalizeURL(endpoint.InternalURL)
+					case gophercloud.AvailabilityAdmin:
+						endpointURL = gophercloud.NormalizeURL(endpoint.AdminURL)
+					default:
+						err := &openstack.ErrInvalidAvailabilityProvided{}
+						err.Argument = "Availability"
+						err.Value = opts.Availability
+						return "", err
+					}
+
+					log.Printf("[DEBUG] OpenStack Endpoint found for %s/%s/%s: %s", entry.Type, entry.Name, opts.Region, endpointURL)
+
+					return endpointURL, nil
+				}
+			}
+		}
+	}
+
+	// Report an error if there were no matching endpoints.
+	err := &gophercloud.ErrEndpointNotFound{}
+	return "", err
+}
+
+func v3EndpointURL(catalog *tokens3.ServiceCatalog, opts gophercloud.EndpointOpts, aliases []string) (string, error) {
+	if opts.Availability != gophercloud.AvailabilityAdmin &&
+		opts.Availability != gophercloud.AvailabilityPublic &&
+		opts.Availability != gophercloud.AvailabilityInternal {
+		err := &openstack.ErrInvalidAvailabilityProvided{}
+		err.Argument = "Availability"
+		err.Value = opts.Availability
+		return "", err
+	}
+
+	// loop over prioritized aliases and find the first matching endpoint
+	for _, alias := range aliases {
+		for _, entry := range catalog.Entries {
+			if alias == entry.Type && (opts.Name == "" || entry.Name == opts.Name) {
+				for _, endpoint := range entry.Endpoints {
+					if opts.Availability != gophercloud.Availability(endpoint.Interface) {
+						continue
+					}
+					if opts.Region != "" && endpoint.Region != opts.Region && endpoint.RegionID != opts.Region {
+						continue
+					}
+
+					log.Printf("[DEBUG] OpenStack Endpoint found for %s/%s/%s: %s", entry.Type, entry.Name, opts.Region, endpoint.URL)
+
+					return gophercloud.NormalizeURL(endpoint.URL), nil
+				}
+			}
+		}
+	}
+
+	// Report an error if there were no matching endpoints.
+	err := &gophercloud.ErrEndpointNotFound{}
+	return "", err
 }
 
 // DetermineRegion is a helper method to determine the region based on
