@@ -281,6 +281,14 @@ func applyDefaults(eo *gophercloud.EndpointOpts, service string) {
 func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gophercloud.EndpointOpts, service string) (*gophercloud.ServiceClient, error) {
 	// override the default gophercloud eo.Type with the desired service type
 	applyDefaults(&eo, service)
+	ep, err := c.OsClient.EndpointLocator(eo)
+	if err != nil {
+		log.Printf("[DEBUG] Cannot set a new OpenStack Endpoint %s: %v", service, err)
+		return client, err
+	}
+	client.Endpoint = ep
+	client.Type = service
+
 	v, ok := c.EndpointOverrides[service]
 	if !ok {
 		return client, nil
@@ -292,8 +300,6 @@ func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gopherc
 
 	// overriden endpoint is a URL
 	if u, err := url.Parse(val); err == nil && u.Scheme != "" && u.Host != "" {
-		applyDefaults(&eo, service)
-		client.ProviderClient = c.OsClient
 		client.Endpoint = val
 		client.ResourceBase = ""
 		client.Type = service
@@ -303,16 +309,15 @@ func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gopherc
 
 	// overriden endpoint is a new service type
 	applyDefaults(&eo, val)
-	url, err := c.OsClient.EndpointLocator(eo)
+	ep, err = c.OsClient.EndpointLocator(eo)
 	if err != nil {
 		log.Printf("[DEBUG] Cannot set a new OpenStack Endpoint %s alias: %v", val, err)
 		return client, err
 	}
-	client.ProviderClient = c.OsClient
-	client.Endpoint = url
+	client.Endpoint = ep
 	client.Type = val
 
-	log.Printf("[DEBUG] OpenStack Endpoint for %s alias: %s", val, url)
+	log.Printf("[DEBUG] OpenStack Endpoint for %s alias: %s", val, ep)
 	return client, nil
 }
 
