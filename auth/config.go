@@ -280,15 +280,6 @@ func applyDefaults(eo *gophercloud.EndpointOpts, service string) {
 // override an endpoint returned from the catalog.
 func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gophercloud.EndpointOpts, service string) (*gophercloud.ServiceClient, error) {
 	// override the default gophercloud eo.Type with the desired service type
-	applyDefaults(&eo, service)
-	ep, err := c.OsClient.EndpointLocator(eo)
-	if err != nil {
-		log.Printf("[DEBUG] Cannot set a new OpenStack Endpoint %s: %v", service, err)
-		return client, err
-	}
-	client.Endpoint = ep
-	client.Type = service
-
 	v, ok := c.EndpointOverrides[service]
 	if !ok {
 		return client, nil
@@ -309,7 +300,7 @@ func (c *Config) DetermineEndpoint(client *gophercloud.ServiceClient, eo gopherc
 
 	// overriden endpoint is a new service type
 	applyDefaults(&eo, val)
-	ep, err = c.OsClient.EndpointLocator(eo)
+	ep, err := c.OsClient.EndpointLocator(eo)
 	if err != nil {
 		log.Printf("[DEBUG] Cannot set a new OpenStack Endpoint %s alias: %v", val, err)
 		return client, err
@@ -450,6 +441,7 @@ func (c *Config) CommonServiceClientInit(ctx context.Context, newClient commonCo
 		Region:       c.DetermineRegion(region),
 		Availability: clientconfig.GetEndpointType(c.EndpointType),
 	}
+	applyDefaults(&eo, service)
 	client, err := newClient(c.OsClient, eo)
 	if err, ok := err.(*gophercloud.ErrEndpointNotFound); ok && client != nil {
 		client, e := c.DetermineEndpoint(client, eo, service)
@@ -505,6 +497,7 @@ func (c *Config) MessagingV2Client(ctx context.Context, clientID string, region 
 		Region:       c.DetermineRegion(region),
 		Availability: clientconfig.GetEndpointType(c.EndpointType),
 	}
+	applyDefaults(&eo, "messaging")
 	client, err := openstack.NewMessagingV2(c.OsClient, clientID, eo)
 	if err, ok := err.(*gophercloud.ErrEndpointNotFound); ok && client != nil {
 		client, e := c.DetermineEndpoint(client, eo, "messaging")
