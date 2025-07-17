@@ -556,7 +556,7 @@ func (c *Config) OrchestrationV1Client(ctx context.Context, region string) (*gop
 }
 
 func (c *Config) LoadBalancerV2Client(ctx context.Context, region string) (*gophercloud.ServiceClient, error) {
-	return c.CommonServiceClientInit(ctx, openstack.NewLoadBalancerV2, region, "octavia")
+	return c.CommonServiceClientInit(ctx, openstack.NewLoadBalancerV2, region, "load-balancer")
 }
 
 func (c *Config) DatabaseV1Client(ctx context.Context, region string) (*gophercloud.ServiceClient, error) {
