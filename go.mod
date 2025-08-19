@@ -3,7 +3,7 @@ module github.com/terraform-provider-openstack/utils/v2
 go 1.24
 
 require (
-	github.com/gophercloud/gophercloud/v2 v2.7.0
+	github.com/gophercloud/gophercloud/v2 v2.8.0
 	github.com/gophercloud/utils/v2 v2.0.0-20250710092215-8f6f0255f600
 )
 
