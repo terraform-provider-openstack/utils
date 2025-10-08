@@ -134,6 +134,10 @@ func (c *Config) LoadAndValidate(ctx context.Context) error {
 			v := (!*cloud.Verify)
 			c.Insecure = &v
 		}
+
+		if c.IdentityEndpoint == "" && cloud.AuthInfo != nil && cloud.AuthInfo.AuthURL != "" {
+			c.IdentityEndpoint = cloud.AuthInfo.AuthURL
+		}
 	} else {
 		authInfo := &clientconfig.AuthInfo{
 			AuthURL:                     c.IdentityEndpoint,
@@ -166,6 +170,11 @@ func (c *Config) LoadAndValidate(ctx context.Context) error {
 	ao, err := clientconfig.AuthOptions(clientOpts)
 	if err != nil {
 		return err
+	}
+
+	// if AuthOptions didnt resolve an endpoint but clouds.yaml had one
+	if ao.IdentityEndpoint == "" && c.IdentityEndpoint != "" {
+		ao.IdentityEndpoint = c.IdentityEndpoint
 	}
 
 	log.Printf("[DEBUG] OpenStack allowReauth: %t", c.AllowReauth)
