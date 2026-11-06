@@ -20,7 +20,7 @@ jobs:
           cd "$(mktemp -d)"
           go mod init unit_tests
 
-          go install golang.org/x/tools/cmd/goimports@latest
+          go install golang.org/x/tools/cmd/goimports@v0.49.0
 
       - name: Run go vet
         run: |
